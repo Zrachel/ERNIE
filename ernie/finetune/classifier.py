@@ -64,6 +64,7 @@ def create_model(args,
         input_mask=input_mask,
         config=ernie_config,
         use_fp16=args.use_fp16)
+    print( src_ids.name, pos_ids.name, sent_ids.name, task_ids.name, input_mask.name)
 
     cls_feats = ernie.get_pooled_output()
     cls_feats = fluid.layers.dropout(
@@ -74,10 +75,10 @@ def create_model(args,
         input=cls_feats,
         size=args.num_labels,
         param_attr=fluid.ParamAttr(
-            name=task_name + "_cls_out_w",
+            name="_cls_out_w",
             initializer=fluid.initializer.TruncatedNormal(scale=0.02)),
         bias_attr=fluid.ParamAttr(
-            name=task_name + "_cls_out_b",
+            name="_cls_out_b",
             initializer=fluid.initializer.Constant(0.)))
 
     assert is_classify != is_regression, 'is_classify or is_regression must be true and only one of them can be true'
@@ -451,3 +452,59 @@ def predict(exe,
     probs = np.concatenate(probs, axis=0).reshape([len(preds), -1])
 
     return qids, preds, probs
+
+def make_all_inputs(args):
+    shapes=[[-1, args.max_seq_len, 1], [-1, args.max_seq_len, 1], [-1, args.max_seq_len, 1],
+            [-1, args.max_seq_len, 1], [-1, args.max_seq_len, 1]]
+    dtypes=['int64', 'int64', 'int64', 'float32', 'int64']
+    lod_levels=[0, 0, 0, 0, 0]
+    #names = ['read_file_0.tmp_0', 'read_file_0.tmp_1', 'read_file_0.tmp_2', 'read_file_0.tmp_3', 'read_file_0.tmp_4', 'read_file_0.tmp_5']
+    names = ['eval_placeholder_0', 'eval_placeholder_1', 'eval_placeholder_2', 'eval_placeholder_3', 'eval_placeholder_4']
+    var_list = []
+    for i in range(len(names)):
+        var_list.append(fluid.layers.data(name=names[i], shape=shapes[i], dtype=dtypes[i], lod_level=lod_levels[i]))
+    return var_list
+
+def create_model_predict(args, ernie_config, is_prediction=False):
+    (src_ids, sent_ids, pos_ids, input_mask, task_ids) = make_all_inputs(args)
+
+    ernie = ErnieModel(
+        src_ids=src_ids,
+        position_ids=pos_ids,
+        sentence_ids=sent_ids,
+        task_ids=task_ids,
+        input_mask=input_mask,
+        config=ernie_config,
+        use_fp16=args.use_fp16)
+
+    cls_feats = ernie.get_pooled_output()
+    cls_feats = fluid.layers.dropout(
+        x=cls_feats,
+        dropout_prob=0.1,
+        dropout_implementation="upscale_in_train")
+    logits = fluid.layers.fc(
+        input=cls_feats,
+        size=args.num_labels,
+        param_attr=fluid.ParamAttr(
+            name="_cls_out_w",
+            initializer=fluid.initializer.TruncatedNormal(scale=0.02)),
+        bias_attr=fluid.ParamAttr(
+            name="_cls_out_b", initializer=fluid.initializer.Constant(0.)))
+
+    if is_prediction:
+        probs = fluid.layers.softmax(logits)
+        feed_targets_name = [
+            src_ids.name, pos_ids.name, sent_ids.name, input_mask.name
+        ]
+        graph_vars = {
+            "probs": probs,
+        }
+
+        for k, v in graph_vars.items():
+            v.persistable = True
+
+        return probs, graph_vars
+
+    return graph_vars
+
+

@@ -338,6 +338,25 @@ class ClassifyReader(BaseReader):
 
         return return_list
 
+    def _prepare_one_sample(self, example, batch_size, phase=None):
+            """generate batch records"""
+            batch_records, max_len = [], 0
+            record = self._convert_example_to_record(example, self.max_seq_len,
+                    self.tokenizer)
+            max_len = max(max_len, len(record.token_ids))
+            if self.in_tokens:
+                to_append = (len(batch_records) + 1) * max_len <= batch_size
+            else:
+                to_append = len(batch_records) < batch_size
+            if to_append:
+                batch_records.append(record)
+            else:
+                return self._pad_batch_records(batch_records)
+            batch_records, max_len = [record], len(record.token_ids)
+
+            if batch_records:
+                return self._pad_batch_records(batch_records)
+
 
 class SequenceLabelReader(BaseReader):
     def _pad_batch_records(self, batch_records):
